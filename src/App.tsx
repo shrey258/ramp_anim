@@ -1,122 +1,83 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useEffect, useRef } from 'react'
+import * as THREE from 'three'
+
+// Step 1 of the Ramp sand: a grid of points moved entirely on the GPU.
+const vertexShader = /* glsl */ `
+  uniform float uTime;
+  void main() {
+    vec3 p = position;                          // start position, uploaded once
+    p.z += sin(p.x * 4.0 + uTime) * 0.15;       // the only "animation": a ripple
+    p.z += sin(p.y * 3.0 + uTime * 0.7) * 0.15;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    gl_PointSize = 2.0;
+  }
+`
+
+const fragmentShader = /* glsl */ `
+  void main() {
+    gl_FragColor = vec4(0.95, 0.77, 0.43, 0.25); // faint, so overlaps read as density
+  }
+`
 
 function App() {
-  const [count, setCount] = useState(0)
+  const mount = useRef<HTMLDivElement>(null)
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+  useEffect(() => {
+    const el = mount.current!
+    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setPixelRatio(devicePixelRatio)
+    renderer.setSize(innerWidth, innerHeight)
+    el.appendChild(renderer.domElement)
 
-      <div className="ticks"></div>
+    const scene = new THREE.Scene()
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100)
+    camera.position.set(0, -2.2, 1.4)
+    camera.lookAt(0, 0, 0)
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+    // 256 x 256 grid = 65,536 points. JS builds it once, never touches it again.
+    const N = 256
+    const pos = new Float32Array(N * N * 3)
+    for (let i = 0; i < N * N; i++) {
+      pos[i * 3] = (i % N) / N * 4 - 2
+      pos[i * 3 + 1] = Math.floor(i / N) / N * 4 - 2
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3))
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+    const material = new THREE.ShaderMaterial({
+      vertexShader,
+      fragmentShader,
+      uniforms: { uTime: { value: 0 } },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+    scene.add(new THREE.Points(geometry, material))
+
+    const onResize = () => {
+      camera.aspect = innerWidth / innerHeight
+      camera.updateProjectionMatrix()
+      renderer.setSize(innerWidth, innerHeight)
+    }
+    addEventListener('resize', onResize)
+
+    // Per frame: send one number to the GPU. That's it.
+    renderer.setAnimationLoop((t) => {
+      material.uniforms.uTime.value = t / 1000
+      renderer.render(scene, camera)
+    })
+
+    return () => {
+      renderer.setAnimationLoop(null)
+      removeEventListener('resize', onResize)
+      geometry.dispose()
+      material.dispose()
+      renderer.dispose()
+      el.removeChild(renderer.domElement)
+    }
+  }, [])
+
+  return <div ref={mount} style={{ position: 'fixed', inset: 0, background: '#050505' }} />
 }
 
 export default App
